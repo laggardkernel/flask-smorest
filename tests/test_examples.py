@@ -73,69 +73,6 @@ def implicit_data_and_schema_etag_blueprint(collection, schemas):
     return blp
 
 
-def implicit_data_explicit_schema_etag_blueprint(collection, schemas):
-    """Blueprint with implicit ETag computation, explicit schema
-
-    ETag computed automatically with specific ETag schema
-    """
-
-    DocSchema = schemas.DocSchema
-    DocEtagSchema = schemas.DocEtagSchema
-
-    blp = Blueprint("test", __name__, url_prefix="/test")
-
-    @blp.route("/")
-    class Resource(MethodView):
-        @blp.etag(DocEtagSchema(many=True))
-        @blp.response(200, DocSchema(many=True))
-        @blp.paginate()
-        def get(self, pagination_parameters):
-            pagination_parameters.item_count = len(collection.items)
-            return collection.items[
-                pagination_parameters.first_item : pagination_parameters.last_item + 1
-            ]
-
-        @blp.etag(DocEtagSchema)
-        @blp.arguments(DocSchema)
-        @blp.response(201, DocSchema)
-        def post(self, new_item):
-            return collection.post(new_item)
-
-    @blp.route("/<int:item_id>")
-    class ResourceById(MethodView):
-        def _get_item(self, item_id):
-            try:
-                return collection.get_by_id(item_id)
-            except ItemNotFound:
-                abort(404)
-
-        @blp.etag(DocEtagSchema)
-        @blp.response(200, DocSchema)
-        def get(self, item_id):
-            item = self._get_item(item_id)
-            return item
-
-        @blp.etag(DocEtagSchema)
-        @blp.arguments(DocSchema)
-        @blp.response(200, DocSchema)
-        def put(self, new_item, item_id):
-            item = self._get_item(item_id)
-            # Check ETag is a manual action, ETag schema is used
-            blp.check_etag(item)
-            new_item = collection.put(item_id, new_item)
-            return new_item
-
-        @blp.etag(DocEtagSchema)
-        @blp.response(204)
-        def delete(self, item_id):
-            item = self._get_item(item_id)
-            # Check ETag is a manual action, ETag schema is used
-            blp.check_etag(item)
-            collection.delete(item_id)
-
-    return blp
-
-
 def explicit_data_no_schema_etag_blueprint(collection, schemas):
     """Blueprint with explicit ETag computation, no schema
 
@@ -211,7 +148,6 @@ def explicit_data_no_schema_etag_blueprint(collection, schemas):
 @pytest.fixture(
     params=[
         (implicit_data_and_schema_etag_blueprint, "Schema"),
-        (implicit_data_explicit_schema_etag_blueprint, "ETag schema"),
         (explicit_data_no_schema_etag_blueprint, "No schema"),
     ]
 )
@@ -237,16 +173,12 @@ class TestFullExample:
             """Check number of calls to dump/load methods of schemas"""
             schemas.DocSchema.reset_load_count()
             schemas.DocSchema.reset_dump_count()
-            schemas.DocEtagSchema.reset_load_count()
-            schemas.DocEtagSchema.reset_dump_count()
             yield
             assert schemas.DocSchema.load_count == schema_load
             assert schemas.DocSchema.dump_count == schema_dump
-            assert schemas.DocEtagSchema.load_count == etag_schema_load
-            assert schemas.DocEtagSchema.dump_count == etag_schema_dump
 
         # GET collection without ETag: OK
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get("/test/")
             assert response.status_code == 200
             list_etag = response.headers["ETag"]
@@ -257,13 +189,13 @@ class TestFullExample:
             }
 
         # GET collection with correct ETag: Not modified
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get("/test/", headers={"If-None-Match": list_etag})
         assert response.status_code == 304
 
         # POST item_1
         item_1_data = {"field": 0}
-        with assert_counters(1, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(1, 1, 0, 0):
             response = client.post(
                 "/test/", data=json.dumps(item_1_data), content_type="application/json"
             )
@@ -271,7 +203,7 @@ class TestFullExample:
         item_1_id = response.json["item_id"]
 
         # GET collection with wrong/outdated ETag: OK
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get("/test/", headers={"If-None-Match": list_etag})
         assert response.status_code == 200
         list_etag = response.headers["ETag"]
@@ -286,7 +218,7 @@ class TestFullExample:
         }
 
         # GET by ID without ETag: OK
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get(f"/test/{item_1_id}")
         assert response.status_code == 200
         item_etag = response.headers["ETag"]
@@ -296,7 +228,7 @@ class TestFullExample:
             0,
             0 if bp_schema == "No schema" else 1,
             0,
-            1 if bp_schema == "ETag schema" else 0,
+            0,
         ):
             response = client.get(
                 f"/test/{item_1_id}", headers={"If-None-Match": item_etag}
@@ -318,7 +250,7 @@ class TestFullExample:
             1,
             2 if bp_schema == "Schema" else 1,
             0,
-            2 if bp_schema == "ETag schema" else 0,
+            0,
         ):
             response = client.put(
                 f"/test/{item_1_id}",
@@ -335,7 +267,7 @@ class TestFullExample:
             1,
             1 if bp_schema == "Schema" else 0,
             0,
-            1 if bp_schema == "ETag schema" else 0,
+            0,
         ):
             response = client.put(
                 f"/test/{item_1_id}",
@@ -346,14 +278,14 @@ class TestFullExample:
         assert response.status_code == 412
 
         # GET by ID with wrong/outdated ETag: OK
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get(
                 f"/test/{item_1_id}", headers={"If-None-Match": item_etag}
             )
         assert response.status_code == 200
 
         # GET collection with pagination set to 1 element per page
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get(
                 "/test/",
                 headers={"If-None-Match": list_etag},
@@ -373,7 +305,7 @@ class TestFullExample:
 
         # POST item_2
         item_2_data = {"field": 1}
-        with assert_counters(1, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(1, 1, 0, 0):
             response = client.post(
                 "/test/", data=json.dumps(item_2_data), content_type="application/json"
             )
@@ -382,7 +314,7 @@ class TestFullExample:
         # GET collection with pagination set to 1 element per page
         # Content is the same (item_1) but pagination metadata has changed
         # so we don't get a 304 and the data is returned again
-        with assert_counters(0, 1, 0, 1 if bp_schema == "ETag schema" else 0):
+        with assert_counters(0, 1, 0, 0):
             response = client.get(
                 "/test/",
                 headers={"If-None-Match": list_etag},
@@ -411,7 +343,7 @@ class TestFullExample:
             0,
             1 if bp_schema == "Schema" else 0,
             0,
-            1 if bp_schema == "ETag schema" else 0,
+            0,
         ):
             response = client.delete(
                 f"/test/{item_1_id}", headers={"If-Match": item_etag}
@@ -423,7 +355,7 @@ class TestFullExample:
             0,
             1 if bp_schema == "Schema" else 0,
             0,
-            1 if bp_schema == "ETag schema" else 0,
+            0,
         ):
             response = client.delete(
                 f"/test/{item_1_id}", headers={"If-Match": new_item_etag}
