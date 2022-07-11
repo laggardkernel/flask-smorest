@@ -207,6 +207,7 @@ class ResponseMixin:
                 wrapper._apidoc.setdefault("success_status_codes", []).append(
                     status_code
                 )
+            # TODO(lk): alt_response() usage.
             return wrapper
 
         return decorator

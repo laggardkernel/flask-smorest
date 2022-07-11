@@ -89,11 +89,13 @@ class ArgumentsMixin:
             docs.setdefault("responses", {})[error_status_code] = http.HTTPStatus(
                 error_status_code
             ).name
+            # CO(lk): bind doc onto viewer/handler
 
             # Call use_args (from webargs) to inject params in function
             return self.ARGUMENTS_PARSER.use_args(schema, location=location, **kwargs)(
                 wrapper
             )
+            # TODO(lk): webargs
 
         return decorator
 
